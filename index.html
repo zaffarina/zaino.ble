@@ -1,0 +1,144 @@
+html
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zaino Smart PWA</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background-color: #f8f9fa; }
+        h1 { color: #333; transition: all 0.3s; }
+        .btn { display: inline-block; padding: 15px 30px; margin: 10px; font-size: 18px; border: none; border-radius: 8px; color: white; cursor: pointer; font-weight: bold; width: 80%; max-width: 300px; }
+        .btn-connect { background-color: #007bff; }
+        .btn-on { background-color: #28a745; }
+        .btn-off { background-color: #dc3545; }
+        .btn-blink { background-color: #ffc107; color: #333; }
+        .btn-setup { background-color: #6c757d; font-size: 14px; padding: 8px 15px; width: auto; }
+        #status { margin-top: 20px; font-weight: bold; color: #666; font-size: 16px; }
+        #battery { font-size: 24px; margin-top: 15px; color: #28a745; font-weight: bold; }
+        #setup-box { display: none; background: #e2e2e7; padding: 15px; margin: 20px auto; border-radius: 8px; max-width: 300px; }
+        #setup-box input { padding: 8px; font-size: 16px; width: 80%; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+
+    <h1 id="main-title">🎒 ZAINO SMART</h1>
+    <p>Controllo BLE & Cattura Tasti Attiva</p>
+
+    <!-- Indicatore Batteria -->
+    <div id="battery">Batteria Zaino: -- %</div>
+    <br>
+
+    <button class="btn btn-connect" onclick="connettiZaino()">🔌 Connetti Zaino</button>
+    <br><br>
+
+    <button class="btn btn-on" onclick="inviaComando(1)">🟢 Accendi Fisso</button>
+    <button class="btn btn-blink" onclick="inviaComando(2)">🟡 Lampeggia</button>
+    <button class="btn btn-off" onclick="inviaComando(0)">🔴 Spegni</button>
+
+    <div id="status">Stato: Disconnesso</div>
+    <br><br>
+
+    <!-- Pulsante per cambiare nome ditta -->
+    <button class="btn btn-setup" onclick="ToggleSetup()">⚙️ Cambia Nome</button>
+
+    <!-- Pannello di configurazione rapido -->
+    <div id="setup-box">
+        <label for="company-input" style="font-weight:bold; display:block; margin-bottom:5px;">Nome Cliente/Ditta:</label>
+        <input type="text" id="company-input" placeholder="Es. Cooperativa...">
+        <br>
+        <button class="btn btn-on" style="padding:8px 20px; font-size:14px; width:auto;" onclick="SalvaNomeDitta()">Salva</button>
+    </div>
+
+<script>
+    const BLE_SERVICE_UUID = '4fafc201-75d5-4abc-90f6-e560fa1912ba';
+    const BLE_CHAR_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+    const BATTERY_SERVICE_UUID = '0000180f-0000-1000-8000-00805f9b34fb';
+    const BATTERY_CHAR_UUID = '00002a19-0000-1000-8000-00805f9b34fb';
+
+    let caratteristicaComando = null;
+
+    window.onload = function() {
+        const nomeSalvato = localStorage.getItem('nomeDittaZaino');
+        if (nomeSalvato) {
+            document.getElementById('main-title').innerText = "🎒 " + nomeSalvato;
+        }
+    };
+
+    function ToggleSetup() {
+        const box = document.getElementById('setup-box');
+        box.style.display = (box.style.display === 'block') ? 'none' : 'block';
+    }
+
+    function SalvaNomeDitta() {
+        const inputVal = document.getElementById('company-input').value;
+        if (inputVal.trim() !== "") {
+            localStorage.setItem('nomeDittaZaino', inputVal);
+            document.getElementById('main-title').innerText = "🎒 " + inputVal;
+            ToggleSetup();
+        } else {
+            alert("Inserisci un nome valido!");
+        }
+    }
+
+    async function connettiZaino() {
+        const statusDiv = document.getElementById('status');
+        statusDiv.innerText = "Stato: Scansione in corso...";
+        try {
+            const dispositivo = await navigator.bluetooth.requestDevice({
+                filters: [{ services: [BLE_SERVICE_UUID] }],
+                optionalServices: [BATTERY_SERVICE_UUID]
+            });
+
+            statusDiv.innerText = "Stato: Connessione...";
+            const server = await dispositivo.gatt.connect();
+            
+            const servizioComandi = await server.getPrimaryService(BLE_SERVICE_UUID);
+            caratteristicaComando = await servizioComandi.getCharacteristic(BLE_CHAR_UUID);
+
+            try {
+                const servizioBatteria = await server.getPrimaryService(BATTERY_SERVICE_UUID);
+                const caratteristicaBatteria = await servizioBatteria.getCharacteristic(BATTERY_CHAR_UUID);
+                
+                const battValue = await caratteristicaBatteria.readValue();
+                gestisciAggiornamentoBatteria(battValue);
+
+                await caratteristicaBatteria.startNotifications();
+                caratteristicaBatteria.addEventListener('characteristicvaluechanged', (event) => {
+                    gestisciAggiornamentoBatteria(event.target.value);
+                });
+            } catch (errBatt) {
+                console.log("Servizio batteria non trovato o non pronto:", errBatt);
+            }
+
+            statusDiv.innerText = "Stato: Connesso! 🎉";
+        } catch (errore) {
+            console.error("Errore BLE:", errore);
+            statusDiv.innerText = "Stato: Errore di connessione ❌";
+        }
+    }
+
+    function gestisciAggiornamentoBatteria(dataView) {
+        const percentuale = dataView.getUint8(0);
+        document.getElementById('battery').innerText = "Batteria Zaino: " + percentuale + " %";
+    }
+
+    async function inviaComando(valoreByte) {
+        if (!caratteristicaComando) return;
+        try {
+            const dati = Uint8Array.of(valoreByte);
+            await caratteristicaComando.writeValueWithoutResponse(dati);
+            console.log("Comando inviato: " + valoreByte);
+        } catch (errore) {
+            console.error("Errore invio:", errore);
+        }
+    }
+
+    window.addEventListener('keydown', (event) => {
+        if (caratteristicaComando) {
+            inviaComando(2);
+        }
+    });
+</script>
+</body>
+</html>
